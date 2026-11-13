@@ -1,21 +1,26 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <readline/readline.h>
+#include <readline/history.h>
 #include "shell.h"
 
 char* read_cmd(char* prompt, FILE* fp) {
-    printf("%s", prompt);
-    char* cmdline = (char*) malloc(sizeof(char) * MAX_LEN);
-    int c, pos = 0;
+    // readline automatically prints the prompt and reads the user input
+    // it completely ignores the 'fp' (file pointer) since it reads straight from the terminal
+    char* cmdline = readline(prompt);
 
-    while ((c = getc(fp)) != EOF) {
-        if (c == '\n') break;
-        cmdline[pos++] = c;
+    // if the user presses Ctrl+D (EOF), readline returns NULL.
+    if (cmdline == NULL) {
+        return NULL;
     }
 
-    if (c == EOF && pos == 0) {
-        free(cmdline);
-        return NULL; // Handle Ctrl+D
+    // if the command is not empty, we feed it to the history list.
+    if (cmdline[0] != '\0') {
+        add_history(cmdline);
     }
-    
-    cmdline[pos] = '\0';
+
     return cmdline;
 }
 
@@ -38,7 +43,7 @@ char** tokenize(char* cmdline) {
 
     while (*cp != '\0' && argnum < MAXARGS) {
         while (*cp == ' ' || *cp == '\t') cp++; // Skip leading whitespace
-        
+
         if (*cp == '\0') break; // Line was only whitespace
 
         start = cp;

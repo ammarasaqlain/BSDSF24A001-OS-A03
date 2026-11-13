@@ -9,7 +9,7 @@ all: $(EXEC)
 
 $(EXEC): $(OBJ)
 	mkdir -p bin
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) -o $@ $^ -lreadline
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
