@@ -1,5 +1,5 @@
 #include "shell.h"
-#include <readline/readline.h> // needed for the secondary "> " prompt
+#include <readline/readline.h>
 
 // --- HISTORY STATE ---
 #define HISTORY_SIZE 20
@@ -46,9 +46,59 @@ void reap_zombies() {
     }
 }
 
+// =========================================================
+// FEATURE 8: VARIABLE STORAGE STATE
+// =========================================================
+#define MAX_VARS 100
+typedef struct { char name[64]; char value[256]; } ShellVar;
+ShellVar var_list[MAX_VARS];
+int var_count = 0;
+
+void set_var(char* name, char* value) {
+    // update it if it already exists
+    for (int i = 0; i < var_count; i++) {
+        if (strcmp(var_list[i].name, name) == 0) {
+            strncpy(var_list[i].value, value, 255);
+            return;
+        }
+    }
+    // otherwise add a brand new variable
+    if (var_count < MAX_VARS) {
+        strncpy(var_list[var_count].name, name, 63);
+        strncpy(var_list[var_count].value, value, 255);
+        var_count++;
+    }
+}
+
+char* get_var(char* name) {
+    for (int i = 0; i < var_count; i++) {
+        if (strcmp(var_list[i].name, name) == 0) return var_list[i].value;
+    }
+    return ""; // return empty string if the variable does not exist
+}
+
 // --- BUILT-INS ---
 int handle_builtin(char** arglist) {
     if (arglist == NULL || arglist[0] == NULL) return 0; 
+
+    // FEATURE 8: parse VAR=value assignments (must have no spaces)
+    char* eq_pos = strchr(arglist[0], '=');
+    if (eq_pos != NULL && arglist[1] == NULL) {
+        *eq_pos = '\0'; // physically split the string at the '=' sign
+        char* var_name = arglist[0];
+        char* var_val = eq_pos + 1;
+        
+        // automatically strip quotation marks if the user types MSG="hello"
+        if (var_val[0] == '"') {
+            var_val++; 
+            int len = strlen(var_val);
+            if (len > 0 && var_val[len-1] == '"') var_val[len-1] = '\0';
+        }
+        
+        set_var(var_name, var_val); // save it to memory
+        return 1;
+    }
+
     if (strcmp(arglist[0], "exit") == 0) exit(0); 
     else if (strcmp(arglist[0], "cd") == 0) {
         if (arglist[1] == NULL) printf("myshell: expected argument to \"cd\"\n");
@@ -56,7 +106,7 @@ int handle_builtin(char** arglist) {
         return 1; 
     } 
     else if (strcmp(arglist[0], "help") == 0) {
-        printf("myshell built-in commands:\n  cd <dir>\n  help\n  jobs\n  history\n  exit\n");
+        printf("myshell built-in commands:\n  cd <dir>\n  help\n  jobs\n  history\n  set\n  exit\n");
         return 1; 
     } 
     else if (strcmp(arglist[0], "jobs") == 0) {
@@ -70,6 +120,13 @@ int handle_builtin(char** arglist) {
         if (!active_found) printf("No active background jobs.\n");
         return 1; 
     }
+    // FEATURE 8: the set command prints all saved variables
+    else if (strcmp(arglist[0], "set") == 0) {
+        for (int i = 0; i < var_count; i++) {
+            printf("%s=%s\n", var_list[i].name, var_list[i].value);
+        }
+        return 1;
+    }
     else if (strcmp(arglist[0], "history") == 0) {
         for (int i = 0; i < history_count; i++) printf("%d %s\n", i + 1, history[i]);
         return 1;
@@ -77,15 +134,26 @@ int handle_builtin(char** arglist) {
     return 0;
 }
 
-// --- HELPER TO PROCESS A FULL LINE (HANDLES SEMICOLONS AND BACKGROUND) ---
+// --- LINE PROCESSOR ---
 void process_single_line(char* line) {
     char* saveptr;
-    char* line_copy = strdup(line); // duplicate so strtok_r doesn't destroy the original
+    char* line_copy = strdup(line); 
     char* single_cmd = strtok_r(line_copy, ";", &saveptr);
 
     while (single_cmd != NULL) {
         char** arglist;
         if ((arglist = tokenize(single_cmd)) != NULL) {
+            
+            // FEATURE 8: Variable Expansion Step
+            // scan every token. if it starts with $, swap it with its saved value[cite: 11]
+            for (int k = 0; arglist[k] != NULL; k++) {
+                if (arglist[k][0] == '$') {
+                    char* val = get_var(arglist[k] + 1); // get text after the $
+                    free(arglist[k]); 
+                    arglist[k] = strdup(val); // inject the saved value[cite: 11]
+                }
+            }
+
             int bg = 0, i = 0;
             while (arglist[i] != NULL) i++;
             
@@ -125,27 +193,19 @@ int main() {
 
         add_to_history(cmdline);
 
-        // =========================================================
-        // FEATURE 7: THE IF-THEN-ELSE-FI PARSER[cite: 14]
-        // =========================================================
         if (strncmp(cmdline, "if ", 3) == 0) {
             char if_cond[256];
-            strcpy(if_cond, cmdline + 3); // extract the actual command to test
+            strcpy(if_cond, cmdline + 3); 
 
-            // buffers to store the lines of code[cite: 14]
             char then_cmds[20][256]; int then_count = 0;
             char else_cmds[20][256]; int else_count = 0;
             int in_else = 0;
 
-            // special read loop to gather the entire block until "fi" is typed[cite: 14]
             while (1) {
-                char* line = readline("> "); // secondary prompt for scripts
+                char* line = readline("> "); 
                 if (!line) break;
-                
-                // trim leading spaces for clean matching
                 char* trimmed = line;
                 while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
-
                 if (strcmp(trimmed, "fi") == 0) { free(line); break; }
                 if (strcmp(trimmed, "then") == 0) { free(line); continue; }
                 if (strcmp(trimmed, "else") == 0) { in_else = 1; free(line); continue; }
@@ -157,17 +217,25 @@ int main() {
                 free(line);
             }
 
-            // run the condition command to get its exit code[cite: 14]
             char** if_args = tokenize(if_cond);
-            int exit_code = 1; // default to failure
+            int exit_code = 1; 
             if (if_args != NULL) {
+                
+                // FEATURE 8: Expand variables inside the 'if' condition too[cite: 11]
+                for (int k = 0; if_args[k] != NULL; k++) {
+                    if (if_args[k][0] == '$') {
+                        char* val = get_var(if_args[k] + 1);
+                        free(if_args[k]); 
+                        if_args[k] = strdup(val);
+                    }
+                }
+
                 int bg_pid = -1;
-                exit_code = execute(if_args, 0, &bg_pid); // grabs the WEXITSTATUS
+                exit_code = execute(if_args, 0, &bg_pid); 
                 for (int j = 0; if_args[j] != NULL; j++) free(if_args[j]);
                 free(if_args);
             }
 
-            // execute the correct buffer block based on the result[cite: 14]
             if (exit_code == 0) {
                 for (int i = 0; i < then_count; i++) process_single_line(then_cmds[i]);
             } else {
@@ -175,10 +243,9 @@ int main() {
             }
 
             free(cmdline);
-            continue; // skip the rest of the normal loop
+            continue; 
         }
 
-        // if it is not an 'if' statement, process it normally
         process_single_line(cmdline);
         free(cmdline);
     }
