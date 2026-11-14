@@ -106,7 +106,7 @@ int handle_builtin(char** arglist) {
         return 1; 
     } 
     else if (strcmp(arglist[0], "help") == 0) {
-        printf("myshell built-in commands:\n  cd <dir>\n  help\n  jobs\n  history\n  set\n  exit\n");
+        printf("myshell built-in commands:\n  cd <dir>\n  help\n  jobs\n  history\n  set       : list all shell variables\n  exit\n");
         return 1; 
     } 
     else if (strcmp(arglist[0], "jobs") == 0) {
