@@ -17,6 +17,8 @@
 // Function prototypes
 char* read_cmd(char* prompt, FILE* fp);
 char** tokenize(char* cmdline);
-int execute(char** arglist);
+
+// FEATURE 6 UPDATE: execute now takes a background flag (bg) and a pointer for the process ID (bg_pid)
+int execute(char** arglist, int bg, int* bg_pid);
 
 #endif // SHELL_H
