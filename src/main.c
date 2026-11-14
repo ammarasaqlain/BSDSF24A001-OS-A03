@@ -1,4 +1,5 @@
 #include "shell.h"
+#include <readline/readline.h> // needed for the secondary "> " prompt
 
 // --- HISTORY STATE ---
 #define HISTORY_SIZE 20
@@ -11,25 +12,17 @@ void add_to_history(const char* cmdline) {
         history_count++;
     } else {
         free(history[0]);
-        for (int i = 1; i < HISTORY_SIZE; i++) {
-            history[i - 1] = history[i];
-        }
+        for (int i = 1; i < HISTORY_SIZE; i++) history[i - 1] = history[i];
         history[HISTORY_SIZE - 1] = strdup(cmdline);
     }
 }
 
 // --- JOB CONTROL STATE ---
 #define MAX_JOBS 50
-typedef struct {
-    int pid;
-    char cmd[256];
-    int active;
-} Job;
-
+typedef struct { int pid; char cmd[256]; int active; } Job;
 Job jobs_list[MAX_JOBS];
 int job_count = 0;
 
-// add a new process to the background list
 void add_job(int pid, char* cmd) {
     if (job_count < MAX_JOBS) {
         jobs_list[job_count].pid = pid;
@@ -40,15 +33,12 @@ void add_job(int pid, char* cmd) {
     }
 }
 
-// secretly reap dead background processes without freezing the shell
 void reap_zombies() {
-    int status;
-    pid_t pid;
-    // WNOHANG makes it return immediately if no children are dead
+    int status; pid_t pid;
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
         for (int i = 0; i < job_count; i++) {
             if (jobs_list[i].pid == pid && jobs_list[i].active == 1) {
-                jobs_list[i].active = 0; // remove from active jobs
+                jobs_list[i].active = 0; 
                 printf("\n[Job %d] PID %d finished.\n", i + 1, pid);
                 break;
             }
@@ -59,7 +49,6 @@ void reap_zombies() {
 // --- BUILT-INS ---
 int handle_builtin(char** arglist) {
     if (arglist == NULL || arglist[0] == NULL) return 0; 
-
     if (strcmp(arglist[0], "exit") == 0) exit(0); 
     else if (strcmp(arglist[0], "cd") == 0) {
         if (arglist[1] == NULL) printf("myshell: expected argument to \"cd\"\n");
@@ -67,16 +56,10 @@ int handle_builtin(char** arglist) {
         return 1; 
     } 
     else if (strcmp(arglist[0], "help") == 0) {
-        printf("myshell built-in commands:\n");
-        printf("  cd <dir>  : change working directory\n");
-        printf("  help      : show this message\n");
-        printf("  jobs      : list background jobs\n");
-        printf("  history   : show command history\n");
-        printf("  exit      : terminate the shell\n");
+        printf("myshell built-in commands:\n  cd <dir>\n  help\n  jobs\n  history\n  exit\n");
         return 1; 
     } 
     else if (strcmp(arglist[0], "jobs") == 0) {
-        // print all jobs that are still marked active
         int active_found = 0;
         for (int i = 0; i < job_count; i++) {
             if (jobs_list[i].active == 1) {
@@ -94,14 +77,39 @@ int handle_builtin(char** arglist) {
     return 0;
 }
 
+// --- HELPER TO PROCESS A FULL LINE (HANDLES SEMICOLONS AND BACKGROUND) ---
+void process_single_line(char* line) {
+    char* saveptr;
+    char* line_copy = strdup(line); // duplicate so strtok_r doesn't destroy the original
+    char* single_cmd = strtok_r(line_copy, ";", &saveptr);
+
+    while (single_cmd != NULL) {
+        char** arglist;
+        if ((arglist = tokenize(single_cmd)) != NULL) {
+            int bg = 0, i = 0;
+            while (arglist[i] != NULL) i++;
+            
+            if (i > 0 && strcmp(arglist[i - 1], "&") == 0) {
+                bg = 1; free(arglist[i - 1]); arglist[i - 1] = NULL;
+            }
+
+            if (arglist[0] != NULL && handle_builtin(arglist) == 0) {
+                int bg_pid = -1;
+                execute(arglist, bg, &bg_pid);
+                if (bg == 1 && bg_pid != -1) add_job(bg_pid, arglist[0]);
+            }
+            for (int j = 0; arglist[j] != NULL; j++) free(arglist[j]);
+            free(arglist);
+        }
+        single_cmd = strtok_r(NULL, ";", &saveptr); 
+    }
+    free(line_copy);
+}
+
 // --- MAIN LOOP ---
 int main() {
     char* cmdline;
-    char** arglist;
-
     while ((cmdline = read_cmd(PROMPT, stdin)) != NULL) {
-        
-        // CRITICAL: reap dead zombies before printing the next prompt
         reap_zombies();
 
         if (cmdline[0] == '\0') { free(cmdline); continue; }
@@ -109,57 +117,69 @@ int main() {
         if (cmdline[0] == '!') {
             int n = atoi(&cmdline[1]);
             if (n > 0 && n <= history_count) {
-                free(cmdline);
-                cmdline = strdup(history[n - 1]);
-                printf("%s\n", cmdline); 
+                free(cmdline); cmdline = strdup(history[n - 1]); printf("%s\n", cmdline); 
             } else {
-                printf("myshell: no such event: %d\n", n);
-                free(cmdline);
-                continue; 
+                printf("myshell: no such event: %d\n", n); free(cmdline); continue; 
             }
         }
 
         add_to_history(cmdline);
 
-        // FEATURE 6: slice the input string by semicolons[cite: 13]
-        char* saveptr;
-        char* single_cmd = strtok_r(cmdline, ";", &saveptr);
+        // =========================================================
+        // FEATURE 7: THE IF-THEN-ELSE-FI PARSER[cite: 14]
+        // =========================================================
+        if (strncmp(cmdline, "if ", 3) == 0) {
+            char if_cond[256];
+            strcpy(if_cond, cmdline + 3); // extract the actual command to test
 
-        // loop through every chained command sequentially[cite: 13]
-        while (single_cmd != NULL) {
-            
-            if ((arglist = tokenize(single_cmd)) != NULL) {
-                
-                // check if the very last argument is an ampersand (&)[cite: 13]
-                int bg = 0;
-                int i = 0;
-                while (arglist[i] != NULL) i++;
-                
-                if (i > 0 && strcmp(arglist[i - 1], "&") == 0) {
-                    bg = 1; // set background flag[cite: 13]
-                    free(arglist[i - 1]); // wipe the & from memory
-                    arglist[i - 1] = NULL; // hide it from execution
-                }
+            // buffers to store the lines of code[cite: 14]
+            char then_cmds[20][256]; int then_count = 0;
+            char else_cmds[20][256]; int else_count = 0;
+            int in_else = 0;
 
-                if (arglist[0] != NULL && handle_builtin(arglist) == 0) {
-                    int bg_pid = -1;
-                    
-                    // pass the bg flag and PID catcher into execute
-                    execute(arglist, bg, &bg_pid);
-                    
-                    // if it was a background job, add it to our list[cite: 13]
-                    if (bg == 1 && bg_pid != -1) {
-                        add_job(bg_pid, arglist[0]);
-                    }
-                }
+            // special read loop to gather the entire block until "fi" is typed[cite: 14]
+            while (1) {
+                char* line = readline("> "); // secondary prompt for scripts
+                if (!line) break;
                 
-                for (int j = 0; arglist[j] != NULL; j++) free(arglist[j]);
-                free(arglist);
+                // trim leading spaces for clean matching
+                char* trimmed = line;
+                while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
+
+                if (strcmp(trimmed, "fi") == 0) { free(line); break; }
+                if (strcmp(trimmed, "then") == 0) { free(line); continue; }
+                if (strcmp(trimmed, "else") == 0) { in_else = 1; free(line); continue; }
+
+                if (trimmed[0] != '\0') {
+                    if (in_else) strcpy(else_cmds[else_count++], trimmed);
+                    else strcpy(then_cmds[then_count++], trimmed);
+                }
+                free(line);
             }
-            
-            // grab the next command after the semicolon
-            single_cmd = strtok_r(NULL, ";", &saveptr); 
+
+            // run the condition command to get its exit code[cite: 14]
+            char** if_args = tokenize(if_cond);
+            int exit_code = 1; // default to failure
+            if (if_args != NULL) {
+                int bg_pid = -1;
+                exit_code = execute(if_args, 0, &bg_pid); // grabs the WEXITSTATUS
+                for (int j = 0; if_args[j] != NULL; j++) free(if_args[j]);
+                free(if_args);
+            }
+
+            // execute the correct buffer block based on the result[cite: 14]
+            if (exit_code == 0) {
+                for (int i = 0; i < then_count; i++) process_single_line(then_cmds[i]);
+            } else {
+                for (int i = 0; i < else_count; i++) process_single_line(else_cmds[i]);
+            }
+
+            free(cmdline);
+            continue; // skip the rest of the normal loop
         }
+
+        // if it is not an 'if' statement, process it normally
+        process_single_line(cmdline);
         free(cmdline);
     }
 

@@ -1,7 +1,6 @@
 #include "shell.h"
 #include <fcntl.h>
 
-// updated to accept the background flag (bg) and a pointer to send the PID back (bg_pid)
 int execute(char* arglist[], int bg, int* bg_pid) {
     
     // 1. PIPES
@@ -39,14 +38,17 @@ int execute(char* arglist[], int bg, int* bg_pid) {
 
         close(fd[0]); close(fd[1]);
 
-        // if background is true, track the last process of the pipe and DO NOT wait
         if (bg) {
             *bg_pid = pid2; 
+            return 0;
         } else {
-            waitpid(pid1, NULL, 0);
-            waitpid(pid2, NULL, 0);
+            int status1, status2;
+            waitpid(pid1, &status1, 0);
+            waitpid(pid2, &status2, 0);
+            // FEATURE 7: return the mathematical exit code of the final pipe command
+            if (WIFEXITED(status2)) return WEXITSTATUS(status2);
+            return 1;
         }
-        return 0;
     }
 
     // 2. REDIRECTION
@@ -64,7 +66,7 @@ int execute(char* arglist[], int bg, int* bg_pid) {
         }
     }
 
-    // 3. EXECUTION
+    // 3. NORMAL EXECUTION
     int status;
     int cpid = fork();
 
@@ -82,12 +84,16 @@ int execute(char* arglist[], int bg, int* bg_pid) {
             if (in_fd != -1) close(in_fd);
             if (out_fd != -1) close(out_fd);
 
-            // FEATURE 6: if background, pass PID back and skip waitpid
             if (bg) {
                 *bg_pid = cpid;
+                return 0;
             } else {
                 waitpid(cpid, &status, 0);
+                // FEATURE 7: extract the exact exit code from the child process
+                if (WIFEXITED(status)) {
+                    return WEXITSTATUS(status);
+                }
+                return 1; // default to failure if it crashed
             }
-            return 0;
     }
 }
