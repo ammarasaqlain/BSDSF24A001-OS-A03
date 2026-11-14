@@ -1,0 +1,6 @@
+total 16
+-rw-r--r-- 1 ubuntu ubuntu  275 Nov 14 21:40 Makefile
+drwxr-xr-x 2 ubuntu ubuntu 4096 Nov 14 22:08 bin
+drwxr-xr-x 2 ubuntu ubuntu 4096 Nov 14 00:04 include
+drwxr-xr-x 2 ubuntu ubuntu 4096 Nov 14 22:08 src
+-rw-r--r-- 1 ubuntu ubuntu    0 Nov 14 22:09 test.txt
